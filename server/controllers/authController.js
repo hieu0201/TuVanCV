@@ -130,10 +130,9 @@ async function register(req, res) {
 
     return res.status(201).json({
       success: true,
-      message: 'Đăng ký tài khoản thành công! Vui lòng nhập mã OTP đã gửi đến email của bạn.',
+      message: `Đăng ký thành công! Mã OTP bảo mật đã được gửi đến email ${normalizedEmail}. Vui lòng mở hộp thư để lấy mã xác thực.`,
       requireOtp: true,
-      email: normalizedEmail,
-      otpPreview: otp
+      email: normalizedEmail
     });
   } catch (error) {
     console.error('Lỗi register:', error);
@@ -261,7 +260,7 @@ async function resendOtp(req, res) {
           await user.save();
 
           sendOtpEmail(normalizedEmail, newOtp, user.fullName).catch(console.warn);
-          return res.json({ success: true, message: 'Mã OTP mới đã được gửi tới hộp thư của bạn.', otpPreview: newOtp });
+          return res.json({ success: true, message: 'Mã OTP mới đã được gửi tới hộp thư của bạn.' });
         }
       } catch (dbErr) {}
     }
@@ -271,7 +270,7 @@ async function resendOtp(req, res) {
     fbUser.emailOtp = newOtp;
     fbUser.emailOtpExpires = newExpires;
     sendOtpEmail(normalizedEmail, newOtp, fbUser.fullName).catch(console.warn);
-    return res.json({ success: true, message: 'Mã OTP mới đã được gửi lại.', otpPreview: newOtp });
+    return res.json({ success: true, message: 'Mã OTP mới đã được gửi lại.' });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Lỗi server khi gửi lại OTP' });
   }
