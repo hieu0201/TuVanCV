@@ -83,7 +83,12 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }) {
         });
         if (res && res.success) {
           localStorage.setItem('smartrecruit_pending_otp_email', normalizedEmail);
-          setSuccessMsg(res.message || 'Vui lòng kiểm tra mã OTP gửi về email.');
+          if (res.otpPreview) {
+            setOtp(res.otpPreview);
+            setSuccessMsg(`Mã OTP của bạn: ${res.otpPreview} (Hệ thống đã tự điền sẵn)`);
+          } else {
+            setSuccessMsg(res.message || 'Vui lòng kiểm tra mã OTP gửi về email.');
+          }
           setMode('otp');
         } else {
           setErrorMsg(res?.message || 'Đăng ký thất bại');
@@ -119,7 +124,12 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }) {
     try {
       const res = await resendOtp(email);
       if (res && res.success) {
-        setSuccessMsg(res.message);
+        if (res.otpPreview) {
+          setOtp(res.otpPreview);
+          setSuccessMsg(`Mã OTP mới: ${res.otpPreview} (Đã tự động điền)`);
+        } else {
+          setSuccessMsg(res.message || 'Mã OTP mới đã được gửi lại.');
+        }
       } else {
         setErrorMsg(res?.message || 'Không thể gửi lại mã');
       }

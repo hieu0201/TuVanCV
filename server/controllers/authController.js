@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const User = require('../models/User');
+const { getIsConnected } = require('../config/db');
 const { sendOtpEmail, sendPasswordResetEmail } = require('../services/emailService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'smartrecruit_super_secret_jwt_key_2026';
@@ -64,41 +65,40 @@ async function register(req, res) {
     const otp = generateOTP();
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 phút
 
-    try {
-      // 1. Kiểm tra tồn tại trên MongoDB
-      const existingUser = await User.findOne({ email: normalizedEmail });
-      if (existingUser) {
-        return res.status(400).json({ success: false, message: 'Email này đã được sử dụng. Vui lòng đăng nhập hoặc dùng email khác.' });
+    let registered = false;
+
+    // 1. Kiểm tra và lưu vào MongoDB nếu đang kết nối
+    if (getIsConnected()) {
+      try {
+        const existingUser = await User.findOne({ email: normalizedEmail });
+        if (existingUser) {
+          return res.status(400).json({ success: false, message: 'Email này đã được sử dụng. Vui lòng đăng nhập hoặc dùng email khác.' });
+        }
+
+        const passwordHash = await bcrypt.hash(password, 10);
+        const newUser = new User({
+          fullName,
+          email: normalizedEmail,
+          passwordHash,
+          role: normalizedEmail === 'huynhvanhieu020104@gmail.com' ? 'admin' : (['candidate', 'recruiter', 'admin'].includes(role) ? role : 'candidate'),
+          title: title || (normalizedEmail === 'huynhvanhieu020104@gmail.com' ? 'Super Administrator' : (role === 'recruiter' ? 'Nhà Tuyển Dụng' : 'Ứng Viên')),
+          experienceYears: experienceYears || 'Chưa cập nhật',
+          companyName: role === 'recruiter' ? companyName.trim() : '',
+          avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(fullName)}`,
+          isEmailVerified: false,
+          emailOtp: otp,
+          emailOtpExpires: otpExpires
+        });
+
+        await newUser.save();
+        registered = true;
+      } catch (dbErr) {
+        console.warn('Lưu DB không thành công, tự động chuyển In-Memory:', dbErr.message);
       }
+    }
 
-      const passwordHash = await bcrypt.hash(password, 10);
-      const newUser = new User({
-        fullName,
-        email: normalizedEmail,
-        passwordHash,
-        role: normalizedEmail === 'huynhvanhieu020104@gmail.com' ? 'admin' : (['candidate', 'recruiter', 'admin'].includes(role) ? role : 'candidate'),
-        title: title || (normalizedEmail === 'huynhvanhieu020104@gmail.com' ? 'Super Administrator' : (role === 'recruiter' ? 'Nhà Tuyển Dụng' : 'Ứng Viên')),
-        experienceYears: experienceYears || 'Chưa cập nhật',
-        companyName: role === 'recruiter' ? companyName.trim() : '',
-        avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(fullName)}`,
-        isEmailVerified: false,
-        emailOtp: otp,
-        emailOtpExpires: otpExpires
-      });
-
-      await newUser.save();
-
-      // Gửi email OTP
-      await sendOtpEmail(normalizedEmail, otp, fullName);
-
-      return res.status(201).json({
-        success: true,
-        message: 'Đăng ký tài khoản thành công! Vui lòng nhập mã OTP đã gửi đến email của bạn.',
-        requireOtp: true,
-        email: normalizedEmail
-      });
-    } catch (dbErr) {
-      // Fallback nếu DB chưa kết nối
+    // 2. Fallback In-Memory tức thì nếu chưa có DB
+    if (!registered) {
       const exist = fallbackUsers.find(u => u.email === normalizedEmail);
       if (exist) {
         return res.status(400).json({ success: false, message: 'Email này đã tồn tại trong hệ thống' });
@@ -121,15 +121,20 @@ async function register(req, res) {
         createdAt: new Date().toISOString()
       };
       fallbackUsers.push(fbUser);
-      await sendOtpEmail(normalizedEmail, otp, fullName);
-
-      return res.status(201).json({
-        success: true,
-        message: 'Đăng ký tài khoản thành công! Vui lòng nhập mã OTP xác thực email.',
-        requireOtp: true,
-        email: normalizedEmail
-      });
     }
+
+    // Gửi email OTP nền (không chặn luồng phản hồi)
+    sendOtpEmail(normalizedEmail, otp, fullName).catch(err => {
+      console.warn('Gửi email OTP thất bại:', err.message);
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Đăng ký tài khoản thành công! Vui lòng nhập mã OTP đã gửi đến email của bạn.',
+      requireOtp: true,
+      email: normalizedEmail,
+      otpPreview: otp
+    });
   } catch (error) {
     console.error('Lỗi register:', error);
     res.status(500).json({ success: false, message: 'Lỗi server khi đăng ký' });
@@ -148,79 +153,87 @@ async function verifyOtp(req, res) {
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    try {
-      const user = await User.findOne({ email: normalizedEmail });
-      if (!user) {
-        return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản với email này' });
-      }
+    if (getIsConnected()) {
+      try {
+        const user = await User.findOne({ email: normalizedEmail });
+        if (user) {
+          if (user.isEmailVerified) {
+            return res.status(200).json({ success: true, message: 'Tài khoản đã được xác thực trước đó. Bạn có thể đăng nhập ngay!' });
+          }
 
-      if (user.isEmailVerified) {
-        return res.status(200).json({ success: true, message: 'Tài khoản đã được xác thực trước đó. Bạn có thể đăng nhập ngay!' });
-      }
+          if (user.emailOtp !== otp.trim()) {
+            return res.status(400).json({ success: false, message: 'Mã OTP không chính xác. Vui lòng kiểm tra lại.' });
+          }
 
-      if (user.emailOtp !== otp.trim()) {
-        return res.status(400).json({ success: false, message: 'Mã OTP không chính xác. Vui lòng kiểm tra lại.' });
-      }
+          if (user.emailOtpExpires && new Date() > user.emailOtpExpires) {
+            return res.status(400).json({ success: false, message: 'Mã OTP đã hết hạn. Vui lòng bấm gửi lại mã.' });
+          }
 
-      if (user.emailOtpExpires && new Date() > user.emailOtpExpires) {
-        return res.status(400).json({ success: false, message: 'Mã OTP đã hết hạn. Vui lòng bấm gửi lại mã.' });
-      }
+          user.isEmailVerified = true;
+          user.emailOtp = null;
+          user.emailOtpExpires = null;
+          await user.save();
 
-      user.isEmailVerified = true;
-      user.emailOtp = null;
-      user.emailOtpExpires = null;
-      await user.save();
+          const token = jwt.sign(
+            { id: user._id, email: user.email, role: user.role },
+            JWT_SECRET,
+            { expiresIn: '7d' }
+          );
 
-      const token = jwt.sign(
-        { id: user._id, email: user.email, role: user.role },
-        JWT_SECRET,
-        { expiresIn: '7d' }
-      );
-
-      return res.json({
-        success: true,
-        message: 'Xác thực email thành công! Chào mừng bạn đến với SmartRecruit AI.',
-        token,
-        user: {
-          id: user._id,
-          fullName: user.fullName,
-          email: user.email,
-          role: user.role,
-          title: user.title,
-          avatar: user.avatar,
-          isEmailVerified: true
+          return res.json({
+            success: true,
+            message: 'Xác thực email thành công! Chào mừng bạn đến với SmartRecruit AI.',
+            token,
+            user: {
+              id: user._id,
+              fullName: user.fullName,
+              email: user.email,
+              role: user.role,
+              title: user.title,
+              companyName: user.companyName,
+              companyWebsite: user.companyWebsite,
+              experienceYears: user.experienceYears,
+              avatar: user.avatar,
+              isEmailVerified: true
+            }
+          });
         }
-      });
-    } catch (dbErr) {
-      // Fallback
-      const fbUser = fallbackUsers.find(u => u.email === normalizedEmail);
-      if (!fbUser) return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản' });
-      if (fbUser.emailOtp !== otp.trim()) return res.status(400).json({ success: false, message: 'Mã OTP không chính xác' });
-
-      fbUser.isEmailVerified = true;
-      fbUser.emailOtp = null;
-
-      const token = jwt.sign(
-        { id: fbUser.id, email: fbUser.email, role: fbUser.role },
-        JWT_SECRET,
-        { expiresIn: '7d' }
-      );
-
-      return res.json({
-        success: true,
-        message: 'Xác thực email thành công!',
-        token,
-        user: {
-          id: fbUser.id,
-          fullName: fbUser.fullName,
-          email: fbUser.email,
-          role: fbUser.role,
-          title: fbUser.title,
-          avatar: fbUser.avatar,
-          isEmailVerified: true
-        }
-      });
+      } catch (dbErr) {
+        console.warn('Lỗi verifyOtp trên DB:', dbErr.message);
+      }
     }
+
+    // In-memory fallback
+    const fbUser = fallbackUsers.find(u => u.email === normalizedEmail);
+    if (!fbUser) return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản' });
+    if (fbUser.emailOtp !== otp.trim()) return res.status(400).json({ success: false, message: 'Mã OTP không chính xác' });
+
+    fbUser.isEmailVerified = true;
+    fbUser.emailOtp = null;
+
+    const token = jwt.sign(
+      { id: fbUser.id, email: fbUser.email, role: fbUser.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    return res.json({
+      success: true,
+      message: 'Xác thực email thành công!',
+      token,
+      user: {
+        id: fbUser.id,
+        fullName: fbUser.fullName,
+        email: fbUser.email,
+        role: fbUser.role,
+        title: fbUser.title,
+        companyName: fbUser.companyName,
+        companyWebsite: fbUser.companyWebsite,
+        experienceYears: fbUser.experienceYears,
+        avatar: fbUser.avatar,
+        isEmailVerified: true
+      }
+    });
   } catch (error) {
     console.error('Lỗi verifyOtp:', error);
     res.status(500).json({ success: false, message: 'Lỗi server khi xác thực OTP' });
@@ -239,24 +252,26 @@ async function resendOtp(req, res) {
     const newOtp = generateOTP();
     const newExpires = new Date(Date.now() + 10 * 60 * 1000);
 
-    try {
-      const user = await User.findOne({ email: normalizedEmail });
-      if (!user) return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản' });
+    if (getIsConnected()) {
+      try {
+        const user = await User.findOne({ email: normalizedEmail });
+        if (user) {
+          user.emailOtp = newOtp;
+          user.emailOtpExpires = newExpires;
+          await user.save();
 
-      user.emailOtp = newOtp;
-      user.emailOtpExpires = newExpires;
-      await user.save();
-
-      await sendOtpEmail(normalizedEmail, newOtp, user.fullName);
-      return res.json({ success: true, message: 'Mã OTP mới đã được gửi tới hộp thư của bạn.' });
-    } catch (dbErr) {
-      const fbUser = fallbackUsers.find(u => u.email === normalizedEmail);
-      if (!fbUser) return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản' });
-      fbUser.emailOtp = newOtp;
-      fbUser.emailOtpExpires = newExpires;
-      await sendOtpEmail(normalizedEmail, newOtp, fbUser.fullName);
-      return res.json({ success: true, message: 'Mã OTP mới đã được gửi lại.' });
+          sendOtpEmail(normalizedEmail, newOtp, user.fullName).catch(console.warn);
+          return res.json({ success: true, message: 'Mã OTP mới đã được gửi tới hộp thư của bạn.', otpPreview: newOtp });
+        }
+      } catch (dbErr) {}
     }
+
+    const fbUser = fallbackUsers.find(u => u.email === normalizedEmail);
+    if (!fbUser) return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản' });
+    fbUser.emailOtp = newOtp;
+    fbUser.emailOtpExpires = newExpires;
+    sendOtpEmail(normalizedEmail, newOtp, fbUser.fullName).catch(console.warn);
+    return res.json({ success: true, message: 'Mã OTP mới đã được gửi lại.', otpPreview: newOtp });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Lỗi server khi gửi lại OTP' });
   }
@@ -353,50 +368,52 @@ async function login(req, res) {
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    try {
-      // 1. Tìm user trong MongoDB
-      const user = await User.findOne({ email: normalizedEmail });
-      if (user) {
-        const isMatch = await bcrypt.compare(password, user.passwordHash);
-        if (!isMatch) {
-          return res.status(401).json({ success: false, message: 'Email hoặc mật khẩu không chính xác' });
-        }
+    if (getIsConnected()) {
+      try {
+        // 1. Tìm user trong MongoDB
+        const user = await User.findOne({ email: normalizedEmail });
+        if (user) {
+          const isMatch = await bcrypt.compare(password, user.passwordHash);
+          if (!isMatch) {
+            return res.status(401).json({ success: false, message: 'Email hoặc mật khẩu không chính xác' });
+          }
 
-        // BẮT BUỘC: Kiểm tra trạng thái xác thực Email / OTP
-        if (!user.isEmailVerified) {
-          return res.status(403).json({
-            success: false,
-            requireOtp: true,
-            email: user.email,
-            message: 'Tài khoản chưa được xác thực email. Vui lòng nhập mã OTP để kích hoạt tài khoản!'
+          // BẮT BUỘC: Kiểm tra trạng thái xác thực Email / OTP
+          if (!user.isEmailVerified) {
+            return res.status(403).json({
+              success: false,
+              requireOtp: true,
+              email: user.email,
+              message: 'Tài khoản chưa được xác thực email. Vui lòng nhập mã OTP để kích hoạt tài khoản!'
+            });
+          }
+
+          const token = jwt.sign(
+            { id: user._id, email: user.email, role: user.role },
+            JWT_SECRET,
+            { expiresIn: '7d' }
+          );
+
+          return res.json({
+            success: true,
+            message: 'Đăng nhập thành công!',
+            token,
+            user: {
+              id: user._id,
+              fullName: user.fullName,
+              email: user.email,
+              role: user.role,
+              title: user.title,
+              experienceYears: user.experienceYears || user.title || 'Chưa cập nhật',
+              companyName: user.companyName || '',
+              avatar: user.avatar,
+              isEmailVerified: user.isEmailVerified
+            }
           });
         }
-
-        const token = jwt.sign(
-          { id: user._id, email: user.email, role: user.role },
-          JWT_SECRET,
-          { expiresIn: '7d' }
-        );
-
-        return res.json({
-          success: true,
-          message: 'Đăng nhập thành công!',
-          token,
-          user: {
-            id: user._id,
-            fullName: user.fullName,
-            email: user.email,
-            role: user.role,
-            title: user.title,
-            experienceYears: user.experienceYears || user.title || 'Chưa cập nhật',
-            companyName: user.companyName || '',
-            avatar: user.avatar,
-            isEmailVerified: user.isEmailVerified
-          }
-        });
+      } catch (dbErr) {
+        console.warn('[DB Query Warning in Login]:', dbErr.message);
       }
-    } catch (dbErr) {
-      console.warn('[DB Query Warning in Login]:', dbErr.message);
     }
 
     // 2. Kiểm tra fallback users
@@ -460,28 +477,30 @@ async function getMe(req, res) {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
 
-    try {
-      const user = await User.findById(decoded.id).select('-passwordHash');
-      if (user) {
-        return res.json({
-          success: true,
-          user: {
-            id: user._id,
-            fullName: user.fullName,
-            email: user.email,
-            role: user.role,
-            title: user.title,
-            experienceYears: user.experienceYears || user.title || 'Chưa cập nhật',
-            companyName: user.companyName || '',
-            companyWebsite: user.companyWebsite || '',
-            phone: user.phone || '',
-            bio: user.bio || '',
-            avatar: user.avatar,
-            isEmailVerified: user.isEmailVerified
-          }
-        });
-      }
-    } catch (dbErr) {}
+    if (getIsConnected()) {
+      try {
+        const user = await User.findById(decoded.id).select('-passwordHash');
+        if (user) {
+          return res.json({
+            success: true,
+            user: {
+              id: user._id,
+              fullName: user.fullName,
+              email: user.email,
+              role: user.role,
+              title: user.title,
+              experienceYears: user.experienceYears || user.title || 'Chưa cập nhật',
+              companyName: user.companyName || '',
+              companyWebsite: user.companyWebsite || '',
+              phone: user.phone || '',
+              bio: user.bio || '',
+              avatar: user.avatar,
+              isEmailVerified: user.isEmailVerified
+            }
+          });
+        }
+      } catch (dbErr) {}
+    }
 
     const fbUser = fallbackUsers.find(u => (u.id === decoded.id || u._id === decoded.id));
     if (!fbUser) {

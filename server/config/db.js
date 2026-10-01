@@ -1,13 +1,25 @@
 const mongoose = require('mongoose');
 
+// VÔ CÙNG QUAN TRỌNG: Tắt buffer commands để Mongoose không bao giờ bị treo khi chưa kết nối DB
+mongoose.set('bufferCommands', false);
+
 let isConnected = false;
 
 const connectDB = async () => {
-  const uri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/tuvan_cv';
+  const uri = process.env.MONGODB_URI;
+  
+  // Nếu trên môi trường cloud (Render) chưa có MONGODB_URI, không cố kết nối vào localhost tránh timeout
+  if (!uri && process.env.NODE_ENV === 'production') {
+    isConnected = false;
+    console.log('⚡ [Database] MONGODB_URI chưa được cấu hình. Hệ thống chuyển sang In-Memory Store tức thì.');
+    return;
+  }
+
+  const connectUri = uri || 'mongodb://127.0.0.1:27017/tuvan_cv';
   
   try {
-    const conn = await mongoose.connect(uri, {
-      serverSelectionTimeoutMS: 5000, // Timeout sau 5s nếu không thấy MongoDB
+    const conn = await mongoose.connect(connectUri, {
+      serverSelectionTimeoutMS: 2500, // Timeout nhanh sau 2.5s nếu không thấy MongoDB
     });
     
     isConnected = true;
@@ -18,8 +30,7 @@ const connectDB = async () => {
   } catch (error) {
     isConnected = false;
     console.warn(`\n⚠️  [MongoDB Warning]: Chưa thể kết nối trực tiếp đến MongoDB (${error.message}).`);
-    console.warn(`👉  Nếu bạn dùng MongoDB Atlas: Hãy dán link MongoDB Atlas vào MONGODB_URI trong file server/.env`);
-    console.warn(`👉  Nếu bạn dùng Local MongoDB: Hãy chắc chắn service MongoDB đang chạy (net start MongoDB).\n`);
+    console.warn(`👉  Hệ thống chuyển sang In-Memory Data Store tức thì (không timeout).\n`);
   }
 };
 

@@ -18,7 +18,10 @@ function getTransporter() {
         auth: {
           user: emailUser,
           pass: emailPass
-        }
+        },
+        connectionTimeout: 4000,
+        greetingTimeout: 4000,
+        socketTimeout: 4000
       });
     } else {
       transporter = nodemailer.createTransport({
@@ -28,7 +31,10 @@ function getTransporter() {
         auth: {
           user: emailUser,
           pass: emailPass
-        }
+        },
+        connectionTimeout: 4000,
+        greetingTimeout: 4000,
+        socketTimeout: 4000
       });
     }
   }
@@ -55,11 +61,15 @@ async function sendMailHelper({ to, subject, html, simulationType, extraLog }) {
   }
 
   try {
-    const info = await mailTransporter.sendMail({ from, to, subject, html });
+    const sendPromise = mailTransporter.sendMail({ from, to, subject, html });
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('SMTP timeout sau 4 giây')), 4000)
+    );
+    const info = await Promise.race([sendPromise, timeoutPromise]);
     console.log(`✅ [Email Service]: Đã gửi email thật thành công đến ${to} (MessageId: ${info.messageId})`);
     return { success: true, simulated: false, messageId: info.messageId };
   } catch (error) {
-    console.error(`❌ [Email Error]: Gặp lỗi khi gửi email qua SMTP (${error.message}). Tạm thời ghi nhận vào hệ thống.`);
+    console.warn(`⚠️ [Email Service]: Lỗi gửi email (${error.message}). Tiếp tục quy trình.`);
     return { success: true, simulated: true, error: error.message };
   }
 }
