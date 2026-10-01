@@ -1,0 +1,22 @@
+{
+  "name": "smartrecruit-ai",
+  "version": "2.0.0",
+  "description": "SmartRecruit AI - Nền Tảng Tuyển Dụng Thông Minh & Phân Tích CV Chuyên Sâu",
+  "scripts": {
+    "server": "npm --prefix server start",
+    "client": "npm --prefix client run dev",
+    "install:all": "npm --prefix server install && npm --prefix client install",
+    "build": "npm --prefix client run build"
+  },
+  "keywords": [
+    "recruitment",
+    "cv-analysis",
+    "ai",
+    "gemini",
+    "react",
+    "nodejs",
+    "mongodb"
+  ],
+  "author": "Huỳnh Văn Hiếu",
+  "license": "ISC"
+}
