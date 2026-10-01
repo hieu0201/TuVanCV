@@ -697,6 +697,21 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Phục vụ giao diện Frontend (Production Build)
+const path = require('path');
+const fs = require('fs');
+const clientDistPath = path.join(__dirname, '../client/dist');
+if (fs.existsSync(clientDistPath)) {
+  app.use(express.static(clientDistPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) {
+      return next();
+    }
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+}
+
 app.listen(PORT, () => {
   console.log(`🚀 SmartRecruit AI Enterprise Server running on http://localhost:${PORT}`);
 });
+
