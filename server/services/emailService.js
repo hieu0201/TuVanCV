@@ -42,9 +42,39 @@ function getTransporter() {
 }
 
 /**
- * Gửi email chung với fallback logging chuyên nghiệp
+ * Gửi email chung với fallback logging chuyên nghiệp (Hỗ trợ cả HTTPS REST API và SMTP)
  */
 async function sendMailHelper({ to, subject, html, simulationType, extraLog }) {
+  // 1. Ưu tiên gửi qua HTTPS REST API (Resend) - KHÔNG BAO GIỜ BỊ CHẶN BỞI FIREWALL CLOUD (Render/Vercel)
+  const resendApiKey = process.env.RESEND_API_KEY;
+  if (resendApiKey) {
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          from: process.env.RESEND_FROM || 'SmartRecruit AI <onboarding@resend.dev>',
+          to: [to],
+          subject: subject,
+          html: html
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        console.log(`✅ [Email Service via Resend HTTPS]: Đã gửi email thành công đến ${to} (ID: ${data.id})`);
+        return { success: true, simulated: false, messageId: data.id };
+      } else {
+        console.warn(`⚠️ [Resend API Warning]:`, data.message || data);
+      }
+    } catch (e) {
+      console.warn(`⚠️ [Resend API Exception]:`, e.message);
+    }
+  }
+
+  // 2. Gửi qua SMTP truyền thống (Gmail / Nodemailer)
   const mailTransporter = getTransporter();
   const from = process.env.EMAIL_FROM || '"SmartRecruit AI" <noreply@smartrecruit.vn>';
 
