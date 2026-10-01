@@ -3,8 +3,6 @@ node_modules/
 **/node_modules/
 
 # Production build
-dist/
-**/dist/
 dist-ssr/
 
 # Environment variables & secrets (CRITICAL: Do NOT commit .env!)
